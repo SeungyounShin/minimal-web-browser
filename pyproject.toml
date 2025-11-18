@@ -1,0 +1,25 @@
+[project]
+name = "minimal-web-browser-env"
+version = "0.1.0"
+description = "Synthetic browser environment that exposes search/open/find actions for tutorials."
+authors = [{ name = "Seungyoun Shin" }]
+requires-python = ">=3.10"
+readme = "README.md"
+dependencies = [
+    "aiohttp>=3.10.2",
+    "beautifulsoup4>=4.12.3",
+    "html2text>=2020.1.16",
+]
+
+[project.scripts]
+minimal-browser = "minimal_web_browser_env.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.0",
+]
+

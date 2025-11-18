@@ -1,0 +1,83 @@
+__pycache__/
+*.py[cod]
+*.so
+.Python
+.venv/
+env/
+venv/
+ENV/
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+share/python-wheels/
+*.egg-info/
+*.egg
+.installed.cfg
+*.log
+pip-log.txt
+pip-delete-this-directory.txt
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+.DS_Store
+# Python 바이트코드 및 캐시
+__pycache__/
+*.py[cod]
+*.so
+*$py.class
+*.pyc
+.python-version
+.pytest_cache/
+
+# 가상환경
+venv/
+env/
+.env
+.venv/
+ENV/
+
+# IDE 설정
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# 빌드 산출물
+dist/
+build/
+*.egg-info/
+eggs/
+*.egg
+
+# 로그 파일
+*.log
+
+# 시스템 파일
+.DS_Store
+Thumbs.db
+
+# 테스트 캐시
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+.hypothesis/
+
+# 기타 임시 파일
+*.bak
+*.tmp
+*~ 
