@@ -9,7 +9,7 @@ import os
 import shlex
 from typing import Any, Dict
 
-from .backend import DuckDuckGoBackend, TutorialBackend
+from .backend import DuckDuckGoBackend, ExaBackend, TutorialBackend
 from .browser import BrowserError
 from .env import ACTION_DEFINITIONS, WebBrowserEnv
 
@@ -63,6 +63,8 @@ async def run_cli() -> None:
     backend_name = os.getenv("MINI_BROWSER_BACKEND", "tutorial").lower()
     if backend_name == "duckduckgo":
         backend = DuckDuckGoBackend()
+    elif backend_name == "exa":
+        backend = ExaBackend()
     else:
         backend = TutorialBackend()
 

@@ -4,6 +4,8 @@ GAIA Benchmark Evaluation Script
 =================================
 Evaluates models on the GAIA benchmark (gaia-benchmark/GAIA) validation set.
 Computes Pass@1 metrics for Level 1, 2, 3, and overall average.
+
+nohup uv run eval/gaia.py --model Qwen/Qwen3-4B-Instruct-2507 --max-turns 60 --output-dir ./gaia_results_qwen3_4b_instruct_2507 --backend exa > gaia_results_qwen3_4b_instruct_2507.log 2>&1 &
 """
 
 import asyncio
@@ -20,9 +22,32 @@ from datasets import load_dataset
 from openai import OpenAI
 from tqdm import tqdm
 
+# ANSI color helpers
+GREEN = "\033[92m"
+BLUE = "\033[94m"
+ORANGE = "\033[33m"
+GRAY = "\033[90m"
+RESET = "\033[0m"
+
+
+def print_green(message: str) -> None:
+    print(f"{GREEN}{message}{RESET}")
+
+
+def print_blue(message: str) -> None:
+    print(f"{BLUE}{message}{RESET}")
+
+
+def print_gray(message: str) -> None:
+    print(f"{GRAY}{message}{RESET}")
+
+
+def print_orange(message: str) -> None:
+    print(f"{ORANGE}{message}{RESET}")
+
 # minimal-web-browser-env import
 sys.path.insert(0, "/home/robin/minimal-web-browser/src")
-from minimal_web_browser_env import DuckDuckGoBackend, WebBrowserEnv
+from minimal_web_browser_env import DuckDuckGoBackend, ExaBackend, WebBrowserEnv
 
 
 # Tool definitions for OpenAI function calling
@@ -31,7 +56,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "search",
-            "description": "Search the web using DuckDuckGo and get a list of search results with links.",
+            "description": "Search the web and get a list of search results with links.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -82,7 +107,7 @@ TOOLS = [
         "type": "function",
         "function": {
             "name": "find",
-            "description": "Search for a pattern within the currently active page and show matching excerpts.",
+            "description": "Search for a pattern within the currently active page and show matching excerpts. Returns a new view with only the matching sections.",
             "parameters": {
                 "type": "object",
                 "properties": {
@@ -92,7 +117,7 @@ TOOLS = [
                     },
                     "cursor": {
                         "type": "integer",
-                        "description": "Optional: cursor position in history",
+                        "description": "Optional: cursor position in history to search from",
                     },
                 },
                 "required": ["pattern"],
@@ -149,7 +174,7 @@ TOOLS = [
 
 DEFAULT_SYSTEM_CONTENT = "You are a helpful and harmless assistant."
 DEFAULT_USER_CONTENT_PREFIX = (
-    "Answer the given question. Call the `thinking` tool whenever a short planning note will help. "
+    "Answer the given question. Call the `thinking` tool whenever a short planning note will help. (DO NOT REPEAT THE SAME THINKING NOTE TWICE)"
     "Fill the fields `goal`, `status`, and `next_step` to track your current focus, what you know so far, "
     "and the single next move. Use the `search` tool if you need external knowledge—the results will appear "
     "between <tool_response> and </tool_response>. Invoke tools as needed, then provide the final answer inside "
@@ -161,9 +186,11 @@ async def execute_tool(env: WebBrowserEnv, tool_name: str, arguments: Dict[str, 
     """Execute a browser tool and return the result as a string."""
     # Handle thinking tool separately
     if tool_name == "thinking":
+        print_orange(f"[Thinking] {arguments}")
         return "NOTE_ACCEPTED_PROCEED_WITH_NEXT_STEP"
     
     try:
+        print_blue(f"[Tool Call] {tool_name} {arguments}")
         state = await env.step(tool_name, **arguments)
         
         # Format the response
@@ -180,10 +207,34 @@ async def execute_tool(env: WebBrowserEnv, tool_name: str, arguments: Dict[str, 
             for link in state["links"][:15]:  # Limit to first 15 links
                 result_parts.append(f"  [{link['id']}] {link['label']}")
         
-        return "\n".join(result_parts)
+        response_text = "\n".join(result_parts)
+        preview = response_text if len(response_text) <= 200 else response_text[:200] + "... (truncated)"
+        print_gray(f"[Tool Response] {preview}")
+        return response_text
     
     except Exception as e:
-        return f"Error executing {tool_name}: {str(e)}"
+        error_msg = str(e).lower() if str(e) else ""
+        error_type = type(e).__name__
+        
+        # Check for timeout errors by type first
+        if isinstance(e, asyncio.TimeoutError) or any(keyword in error_msg for keyword in ['timeout', 'timed out']):
+            print_gray(f"[Tool Error] Timeout for {tool_name}: [{error_type}] {str(e) or 'Request timed out'}")
+            return "Request timed out. The operation took too long. Please try again."
+        
+        # Check for rate limit errors
+        elif any(keyword in error_msg for keyword in ['rate limit', 'ratelimit', 'too many requests', '429']):
+            print_gray(f"[Tool Error] Rate Limit detected for {tool_name}: [{error_type}] {str(e)}")
+            return "Rate limit reached. Please wait before retrying."
+        
+        # Check for other network errors
+        elif any(keyword in error_msg for keyword in ['connection', 'network']):
+            print_gray(f"[Tool Error] Network issue for {tool_name}: [{error_type}] {str(e)}")
+            return f"Network error occurred: {str(e) or error_type}"
+        
+        # Log other errors as errors
+        else:
+            print_gray(f"[Tool Error] Failed to execute {tool_name}: [{error_type}] {str(e) or '(no message)'}")
+            return f"Error executing {tool_name}: {str(e) or error_type}"
 
 
 def extract_answer(text: str) -> Optional[str]:
@@ -245,7 +296,8 @@ async def run_single_query(
                 messages=messages,
                 tools=TOOLS,
                 tool_choice="auto",
-                temperature=0.7,
+                temperature=0.0,
+                top_p=1.0,
             )
             
             choice = response.choices[0]
@@ -291,43 +343,56 @@ async def run_single_query(
                 return answer if answer else message.content
         
         except Exception as e:
-            print(f"Error during inference: {str(e)}")
+            print_green(f"[Error] Inference failed on turn {turn}: {str(e)}")
             return None
     
     # Max turns reached
+    print_green(f"[Warn] Max turns ({max_turns}) reached without getting final answer")
     return None
 
 
 async def evaluate_gaia(
     model_name: str = "Seungyoun/Qwen3-4B-search-r1-w-selective-plan",
     max_turns: int = 60,
-    output_dir: str = "./gaia_results"
+    output_dir: str = "./gaia_results",
+    backend: str = "duckduckgo"
 ):
     """Evaluate on GAIA benchmark validation set."""
     
-    print("=" * 80)
-    print("GAIA Benchmark Evaluation")
-    print("=" * 80)
-    print(f"Model: {model_name}")
-    print(f"Max turns per query: {max_turns}")
-    print("=" * 80)
+    print_green("=" * 80)
+    print_green("GAIA Benchmark Evaluation")
+    print_green("=" * 80)
+    print_green(f"Model: {model_name}")
+    print_green(f"Max turns per query: {max_turns}")
+    print_green(f"Search backend: {backend}")
+    print_green("=" * 80)
     print()
     
     # Load dataset
-    print("Loading GAIA validation dataset...")
+    print_green("Loading GAIA validation dataset...")
     dataset = load_dataset("gaia-benchmark/GAIA", "2023_all", split="validation")
-    print(f"Loaded {len(dataset)} samples\n")
+    print_green(f"Loaded {len(dataset)} samples\n")
     
     # Initialize OpenAI client (pointing to vLLM server)
     client = OpenAI(
-        base_url="http://localhost:8000/v1",
+        base_url="http://localhost:8001/v1",
         api_key="EMPTY",
     )
     
+    # Initialize search backend
+    if backend.lower() == "exa":
+        search_backend = ExaBackend()
+        print_green("Using Exa search backend")
+    elif backend.lower() == "duckduckgo":
+        search_backend = DuckDuckGoBackend()
+        print_green("Using DuckDuckGo search backend")
+    else:
+        raise ValueError(f"Unknown backend: {backend}. Use 'exa' or 'duckduckgo'")
+    
     # Initialize browser environment
     env = WebBrowserEnv(
-        backend=DuckDuckGoBackend(),
-        preview_lines=120,
+        backend=search_backend,
+        preview_lines=240,
     )
     
     # Track results by level
@@ -343,11 +408,19 @@ async def evaluate_gaia(
         level = sample["Level"]
         ground_truth = sample["Final answer"]
         
+        print_green(f"\n[Question {idx + 1}/{len(dataset)} | Task {task_id}] {question}")
+        
         # Run inference
         prediction = await run_single_query(client, env, model_name, question, max_turns)
         
         # Check if correct
         is_correct = check_exact_match(prediction or "", ground_truth)
+        status = "✅ correct" if is_correct else "❌ incorrect"
+        print_green("=====")
+        print_green(f"{task_id} {status}")
+        print_green(f"pred : {prediction or '(no prediction)'}")
+        print_green(f"gt   : {ground_truth}")
+        print_green("-======")
         
         # Store result
         result = {
@@ -380,9 +453,9 @@ async def evaluate_gaia(
         metrics_str = " | ".join([f"{k}: {v:.1f}%" for k, v in level_metrics.items()])
         pbar.set_postfix_str(f"Avg: {avg_pass_at_1:.1f}% | {metrics_str}")
     
-    print("\n" + "=" * 80)
-    print("Evaluation Complete!")
-    print("=" * 80)
+    print_green("\n" + "=" * 80)
+    print_green("Evaluation Complete!")
+    print_green("=" * 80)
     
     # Calculate final metrics
     final_metrics = {}
@@ -397,7 +470,7 @@ async def evaluate_gaia(
                 "correct": correct,
                 "total": total,
             }
-            print(f"Level {level} Pass@1: {pass_at_1:.2f}% ({correct}/{total})")
+            print_green(f"Level {level} Pass@1: {pass_at_1:.2f}% ({correct}/{total})")
     
     # Overall average
     total_correct = sum(1 for r in all_results if r["correct"])
@@ -408,8 +481,8 @@ async def evaluate_gaia(
         "correct": total_correct,
         "total": total_samples,
     }
-    print(f"\nAverage Pass@1: {avg_pass_at_1:.2f}% ({total_correct}/{total_samples})")
-    print("=" * 80)
+    print_green(f"\nAverage Pass@1: {avg_pass_at_1:.2f}% ({total_correct}/{total_samples})")
+    print_green("=" * 80)
     
     # Save results
     output_dir = Path(output_dir)
@@ -427,7 +500,7 @@ async def evaluate_gaia(
             "results": all_results,
         }, f, indent=2, ensure_ascii=False)
     
-    print(f"\nResults saved to: {results_file}")
+    print_green(f"\nResults saved to: {results_file}")
     
     # Save summary only
     summary_file = output_dir / f"gaia_summary_{timestamp}.json"
@@ -442,7 +515,7 @@ async def evaluate_gaia(
     with open(summary_file, "w", encoding="utf-8") as f:
         json.dump(summary_results, f, indent=2, ensure_ascii=False)
     
-    print(f"Summary saved to: {summary_file}")
+    print_green(f"Summary saved to: {summary_file}")
     print()
 
 
@@ -460,7 +533,7 @@ async def main():
     parser.add_argument(
         "--max-turns",
         type=int,
-        default=30,
+        default=60,
         help="Maximum turns per query"
     )
     parser.add_argument(
@@ -469,6 +542,13 @@ async def main():
         default="./gaia_results",
         help="Output directory for results"
     )
+    parser.add_argument(
+        "--backend",
+        type=str,
+        default="exa",
+        choices=["duckduckgo", "exa"],
+        help="Search backend to use (duckduckgo or exa)"
+    )
     
     args = parser.parse_args()
     
@@ -476,6 +556,7 @@ async def main():
         model_name=args.model,
         max_turns=args.max_turns,
         output_dir=args.output_dir,
+        backend=args.backend,
     )
 
 

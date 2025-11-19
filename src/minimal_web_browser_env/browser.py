@@ -5,7 +5,7 @@ Lightweight browser actions that mimic the interface of the tutorial script.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import List
+from typing import Any, List
 
 from .backend import Page, TutorialBackend
 
@@ -124,7 +124,12 @@ class BrowserTool:
         self._last_response = response
         return response
 
-    async def find(self, pattern: str, cursor: int | None = None) -> BrowserResponse:
+    async def find(
+        self,
+        pattern: str,
+        cursor: int | None = None,
+        **_: Any,
+    ) -> BrowserResponse:
         if not pattern:
             raise BrowserError("`pattern` must be non-empty.")
         page = self._get_page(cursor)

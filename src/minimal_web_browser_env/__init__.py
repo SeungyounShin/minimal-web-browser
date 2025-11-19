@@ -7,13 +7,14 @@ Exports:
     WebBrowserEnv -- Env-style wrapper around BrowserTool
 """
 
-from .backend import DuckDuckGoBackend, TutorialBackend
+from .backend import DuckDuckGoBackend, ExaBackend, TutorialBackend
 from .browser import BrowserTool, BrowserError
 from .env import WebBrowserEnv
 
 __all__ = [
     "TutorialBackend",
     "DuckDuckGoBackend",
+    "ExaBackend",
     "BrowserTool",
     "BrowserError",
     "WebBrowserEnv",

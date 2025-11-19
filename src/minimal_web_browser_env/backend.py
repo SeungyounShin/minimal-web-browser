@@ -4,13 +4,25 @@ In-memory backend that mimics a browsing data source.
 
 from __future__ import annotations
 
+import asyncio
+import logging
+import os
 from dataclasses import dataclass, field
-from typing import Dict, List
+from typing import Dict, List, Optional
 from urllib.parse import parse_qs, quote_plus, unquote, urljoin, urlparse
 
 from aiohttp import ClientSession, ClientTimeout
 from bs4 import BeautifulSoup
 from html2text import HTML2Text
+
+logger = logging.getLogger(__name__)
+
+try:
+    from exa_py import Exa
+    EXA_AVAILABLE = True
+except ImportError:
+    EXA_AVAILABLE = False
+    logger.warning("exa_py not installed. ExaBackend will not be available.")
 
 
 @dataclass(frozen=True)
@@ -47,7 +59,7 @@ class TutorialBackend:
 
     source: str = "tutorial-data"
 
-    def __init__(self, max_links: int = 30, request_timeout: float = 15.0) -> None:
+    def __init__(self, max_links: int = 30, request_timeout: float = 30.0) -> None:
         self._pages = self._build_pages()
         self._page_map: Dict[str, Page] = {
             page.url: self._page_to_contents(page) for page in self._pages
@@ -162,13 +174,79 @@ class TutorialBackend:
 
     async def _fetch_remote(self, url: str) -> Page:
         timeout = ClientTimeout(total=self.request_timeout)
-        async with ClientSession(timeout=timeout, headers=REMOTE_HEADERS) as session:
-            async with session.get(url) as response:
-                response.raise_for_status()
-                html = await response.text()
-        return self._html_to_page(url, html)
+        
+        try:
+            async with ClientSession(timeout=timeout, headers=REMOTE_HEADERS) as session:
+                async with session.get(url) as response:
+                    # Check for rate limiting or other status codes
+                    if response.status == 429:
+                        logger.warning(f"⚠️ Rate Limit (429) when fetching: {url}")
+                    elif response.status == 503:
+                        logger.warning(f"⚠️ Service Unavailable (503) when fetching: {url}")
+                    elif response.status >= 400:
+                        logger.warning(f"⚠️ HTTP {response.status} when fetching: {url}")
+                    
+                    response.raise_for_status()
+                    
+                    # Check content type for binary files
+                    content_type = response.headers.get('Content-Type', '').lower()
+                    if any(binary_type in content_type for binary_type in ['pdf', 'octet-stream', 'zip', 'binary']):
+                        logger.warning(f"⚠️ Binary file detected: {url} (Content-Type: {content_type})")
+                        return Page(
+                            url=url,
+                            title=f"Binary File: {urlparse(url).path.split('/')[-1]}",
+                            text=f"⚠️ This is a binary file ({content_type}). Content cannot be displayed as text.\n\nURL: {url}\n\nPlease try searching for the HTML version or abstract page instead.",
+                            links={},
+                            link_labels={},
+                            link_line_index={},
+                        )
+                    
+                    # Try to decode as text
+                    try:
+                        html = await response.text()
+                    except UnicodeDecodeError as e:
+                        logger.warning(f"⚠️ Unicode decode error for {url}: {e}")
+                        return Page(
+                            url=url,
+                            title=f"Binary Content: {urlparse(url).path.split('/')[-1]}",
+                            text=f"⚠️ Unable to decode content as text. This may be a binary file.\n\nURL: {url}\n\nPlease try the HTML version instead.",
+                            links={},
+                            link_labels={},
+                            link_line_index={},
+                        )
+                    
+                    logger.debug(f"✓ Successfully fetched: {url}")
+                    return self._html_to_page(url, html)
+                    
+        except Exception as e:
+            error_msg = str(e).lower() if str(e) else ""
+            error_type = type(e).__name__
+            
+            # Categorize errors by type first, then by message
+            if isinstance(e, asyncio.TimeoutError) or 'timeout' in error_msg or 'timed out' in error_msg:
+                logger.warning(f"⚠️ Timeout when fetching '{url}': [{error_type}] {e or 'Request timed out'}")
+            elif 'rate limit' in error_msg or '429' in error_msg:
+                logger.warning(f"⚠️ Rate Limit when fetching '{url}': [{error_type}] {e}")
+            elif 'connection' in error_msg or 'network' in error_msg:
+                logger.warning(f"⚠️ Connection error when fetching '{url}': [{error_type}] {e}")
+            else:
+                logger.error(f"❌ Error fetching '{url}': [{error_type}] {e or '(no message)'}")
+            
+            # Re-raise to let caller handle it
+            raise
 
     def _html_to_page(self, url: str, html: str) -> Page:
+        # Check if this is a PDF or binary file
+        if url.lower().endswith('.pdf'):
+            return Page(
+                url=url,
+                title=f"PDF: {urlparse(url).path.split('/')[-1]}",
+                text=f"⚠️ This is a PDF file. PDF content cannot be displayed in text format.\n\nURL: {url}\n\nPlease try searching for the HTML version or abstract page instead.",
+                links={},
+                link_labels={},
+                link_line_index={},
+            )
+        
         soup = BeautifulSoup(html, "html.parser")
         title = (
             soup.title.string.strip()
@@ -231,12 +309,144 @@ class DuckDuckGoBackend(TutorialBackend):
     def __init__(self, **kwargs) -> None:
         super().__init__(**kwargs)
 
-    async def search(self, query: str, topn: int = 10) -> Page:  # noqa: ARG002
+    async def search(self, query: str, topn: int = 120) -> Page:  # noqa: ARG002
         search_url = f"https://lite.duckduckgo.com/lite/?q={quote_plus(query)}"
         timeout = ClientTimeout(total=self.request_timeout)
-        async with ClientSession(timeout=timeout, headers=REMOTE_HEADERS) as session:
-            async with session.get(search_url) as response:
-                response.raise_for_status()
-                html = await response.text()
-        return self._html_to_page(search_url, html)
+        
+        try:
+            async with ClientSession(timeout=timeout, headers=REMOTE_HEADERS) as session:
+                async with session.get(search_url) as response:
+                    # Check for rate limiting before raising for status
+                    if response.status == 429:
+                        logger.warning(f"⚠️ DuckDuckGo Rate Limit (429) for query: {query}")
+                    elif response.status == 503:
+                        logger.warning(f"⚠️ DuckDuckGo Service Unavailable (503) for query: {query}")
+                    
+                    response.raise_for_status()
+                    html = await response.text()
+                    
+                    logger.debug(f"✓ DuckDuckGo search successful for query: {query}")
+                    return self._html_to_page(search_url, html)
+                    
+        except Exception as e:
+            error_msg = str(e).lower() if str(e) else ""
+            error_type = type(e).__name__
+            
+            # Categorize errors by type first, then by message
+            if isinstance(e, asyncio.TimeoutError) or 'timeout' in error_msg or 'timed out' in error_msg:
+                logger.warning(f"⚠️ DuckDuckGo Timeout for query '{query}': [{error_type}] {e or 'Request timed out'}")
+            elif 'rate limit' in error_msg or '429' in error_msg:
+                logger.warning(f"⚠️ DuckDuckGo Rate Limit for query '{query}': [{error_type}] {e}")
+            elif 'connection' in error_msg or 'network' in error_msg:
+                logger.warning(f"⚠️ DuckDuckGo Connection error for query '{query}': [{error_type}] {e}")
+            else:
+                logger.error(f"❌ DuckDuckGo search error for query '{query}': [{error_type}] {e or '(no message)'}")
+            
+            # Re-raise to let caller handle it
+            raise
+
+
+class ExaBackend(TutorialBackend):
+    """
+    Backend that uses Exa AI search API for high-quality results.
+    Requires EXA_API_KEY environment variable or api_key parameter.
+    """
+
+    source: str = "exa"
+
+    def __init__(self, api_key: Optional[str] = None, **kwargs) -> None:
+        super().__init__(**kwargs)
+        
+        if not EXA_AVAILABLE:
+            raise ImportError(
+                "exa_py is not installed. Install it with: pip install exa_py"
+            )
+        
+        # Get API key from parameter or environment
+        self.api_key = api_key or os.getenv("EXA_API_KEY")
+        if not self.api_key:
+            raise ValueError(
+                "EXA_API_KEY must be provided as parameter or environment variable"
+            )
+        
+        self.exa = Exa(api_key=self.api_key)
+        logger.info("✓ ExaBackend initialized successfully")
+
+    async def search(self, query: str, topn: int = 10) -> Page:
+        """
+        Search using Exa API and return formatted results.
+        """
+        try:
+            logger.debug(f"Exa search: {query} (topn={topn})")
+            
+            # Run synchronous Exa call in executor to not block async loop
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,
+                lambda: self.exa.search_and_contents(
+                    query,
+                    text=True,
+                    type="auto",
+                    num_results=min(topn, 10),  # Exa has rate limits
+                )
+            )
+            
+            # Format results as a search page
+            intro = [
+                f"Exa Search results for `{query}`",
+                f"Found {len(result.results)} high-quality results.",
+                "Use `open id=<number>` to view full content.",
+            ]
+            
+            urls: Dict[str, str] = {}
+            labels: Dict[str, str] = {}
+            snippets: List[str] = []
+            
+            for idx, item in enumerate(result.results):
+                urls[str(idx)] = item.url
+                labels[str(idx)] = item.title or item.url
+                
+                # Create snippet from text
+                text_preview = ""
+                if item.text:
+                    # Get first 300 chars of text
+                    text_preview = item.text[:300].strip()
+                    if len(item.text) > 300:
+                        text_preview += "..."
+                
+                snippet = f"【{idx}†{item.title or item.url}】\n{text_preview or '(No preview available)'}"
+                snippets.append(snippet)
+            
+            body = "\n\n".join(intro + snippets)
+            
+            # Calculate line indices for links
+            line_map = _compute_link_line_indices(body, urls)
+            
+            logger.debug(f"✓ Exa search successful: {len(result.results)} results")
+            
+            return Page(
+                url=f"exa://search?q={query}",
+                title=f"Exa Search: {query}",
+                text=body,
+                links=urls,
+                link_labels=labels,
+                link_line_index=line_map,
+            )
+            
+        except Exception as e:
+            error_msg = str(e).lower() if str(e) else ""
+            error_type = type(e).__name__
+            
+            # Categorize errors
+            if 'rate limit' in error_msg or '429' in error_msg:
+                logger.warning(f"⚠️ Exa Rate Limit for query '{query}': [{error_type}] {e}")
+            elif 'api key' in error_msg or 'authentication' in error_msg or '401' in error_msg:
+                logger.error(f"❌ Exa Authentication error: [{error_type}] {e}")
+            elif 'timeout' in error_msg or isinstance(e, asyncio.TimeoutError):
+                logger.warning(f"⚠️ Exa Timeout for query '{query}': [{error_type}] {e or 'Request timed out'}")
+            else:
+                logger.error(f"❌ Exa search error for query '{query}': [{error_type}] {e or '(no message)'}")
+            
+            # Re-raise to let caller handle it
+            raise
 

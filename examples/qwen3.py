@@ -3,6 +3,7 @@
 
 vllm serve Qwen/Qwen3-30B-A3B-Thinking-2507 --max-model-len 262144 --reasoning-parser deepseek_r1 --enable-auto-tool-choice --tool-call-parser hermes -tp 4
 vllm serve Seungyoun/Qwen3-4B-search-r1-w-selective-plan --max-model-len 262144 --enable-auto-tool-choice --tool-call-parser hermes -tp 4
+vllm serve Seungyoun/Qwen3-4B-search-r1-reproduce --max-model-len 262144 --enable-auto-tool-choice --tool-call-parser hermes -tp 4
 
 Qwen3 Agentic Web Browser Demo
 ================================
