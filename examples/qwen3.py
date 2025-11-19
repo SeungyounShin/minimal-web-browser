@@ -208,7 +208,7 @@ DEFAULT_USER_CONTENT_PREFIX = (
     "Fill the fields `goal`, `status`, and `next_step` to track your current focus, what you know so far, "
     "and the single next move. Use the `search` tool if you need external knowledge—the results will appear "
     "between <tool_response> and </tool_response>. Invoke tools as needed, then provide the final answer inside "
-    "<answer> and </answer> with extra explanation. Question: "
+    "<answer> and </answer> without extra explanation. Question: "
 )
 
 async def execute_tool(env: WebBrowserEnv, tool_name: str, arguments: Dict[str, Any]) -> str:
@@ -383,7 +383,7 @@ async def run_agent(MODEL_NAME: str, query: str, max_turns: int = 10):
 async def main():
     """Main entry point."""
     # Example query
-    query = "채널톡에서 1PU는 얼마고 무슨 뜻이야?"
+    query = "채널톡 PU 가 무슨뜻이야?"
     
     await run_agent("Seungyoun/Qwen3-4B-search-r1-w-selective-plan", query, max_turns=60)
 
