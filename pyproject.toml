@@ -8,7 +8,9 @@ readme = "README.md"
 dependencies = [
     "aiohttp>=3.10.2",
     "beautifulsoup4>=4.12.3",
+    "datasets>=4.4.1",
     "html2text>=2020.1.16",
+    "openai",
 ]
 
 [project.scripts]
